@@ -286,6 +286,15 @@ function Scanner() {
 
       <div className="scanner-card">
         <div id="reader" ref={scannerRef}></div>
+        <div style={{ 
+          textAlign: 'center', 
+          padding: '20px', 
+          color: 'var(--text-light)',
+          fontSize: '14px'
+        }}>
+          <p>📷 El escáner se inicializará automáticamente</p>
+          <p>Permite el acceso a la cámara cuando se solicite</p>
+        </div>
       </div>
 
       <div className="bottom-buttons">
