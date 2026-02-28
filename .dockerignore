@@ -1,0 +1,36 @@
+# Node modules
+node_modules/
+frontend/node_modules/
+
+# Build artifacts
+frontend/build/
+*.pyc
+__pycache__/
+
+# Environment files (will be set in Coolify)
+.env
+backend/.env
+frontend/.env
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+
+# Tests
+test_reports/
+tests/
+
+# Data (will be volume mounted)
+data/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
