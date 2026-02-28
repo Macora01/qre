@@ -14,8 +14,8 @@ function Scanner() {
   const [nextEnabled, setNextEnabled] = useState(false);
   const [showFinalizeModal, setShowFinalizeModal] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
-  const scannerRef = useRef(null);
-  const html5QrcodeScannerRef = useRef(null);
+  const [isScannerReady, setIsScannerReady] = useState(false);
+  const html5QrcodeRef = useRef(null);
 
   useEffect(() => {
     // Get current user
