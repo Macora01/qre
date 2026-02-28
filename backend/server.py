@@ -1,4 +1,5 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, HTTPException, Request, Response
+from fastapi.responses import JSONResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6,10 +7,11 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from typing import List, Optional
 import uuid
-from datetime import datetime, timezone
-
+from datetime import datetime, timezone, timedelta
+import csv
+import httpx
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -25,46 +27,443 @@ app = FastAPI()
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
+# Ensure /data directory exists
+DATA_DIR = Path("/app/data")
+DATA_DIR.mkdir(exist_ok=True)
+
+
+# ============================================================================
+# MODELS
+# ============================================================================
+
+class User(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    user_id: str
+    email: str
+    name: str
+    picture: Optional[str] = None
+    created_at: datetime
+
+class UserSession(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    user_id: str
+    session_token: str
+    expires_at: datetime
+    created_at: datetime
+
+class BarcodeSession(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    session_id: str
+    user_id: str
+    user_email: str
+    started_at: datetime
+    finalized_at: Optional[datetime] = None
+    barcode_count: int = 0
+
+class BarcodeEntry(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    entry_id: str
+    barcode_session_id: str
+    barcode: str
+    timestamp: datetime
+    user_email: str
+
+class SessionExchangeRequest(BaseModel):
+    session_id: str
+
+class BarcodeSubmit(BaseModel):
+    barcode: str
+
+class SessionStatsResponse(BaseModel):
+    barcode_count: int
+    barcodes: List[str]
+    session_id: str
+    is_duplicate: bool = False
+
+
+# ============================================================================
+# AUTHENTICATION HELPER
+# ============================================================================
+
+async def get_current_user(request: Request) -> User:
+    """
+    Get current authenticated user from session_token
+    Checks cookie first, then Authorization header
+    """
+    session_token = None
     
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    # Check cookie first
+    session_token = request.cookies.get("session_token")
+    
+    # Fallback to Authorization header
+    if not session_token:
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            session_token = auth_header.replace("Bearer ", "")
+    
+    if not session_token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    # Find session in database
+    session_doc = await db.user_sessions.find_one(
+        {"session_token": session_token},
+        {"_id": 0}
+    )
+    
+    if not session_doc:
+        raise HTTPException(status_code=401, detail="Invalid session")
+    
+    # Check expiry with timezone awareness
+    expires_at = session_doc["expires_at"]
+    if isinstance(expires_at, str):
+        expires_at = datetime.fromisoformat(expires_at)
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    
+    if expires_at < datetime.now(timezone.utc):
+        raise HTTPException(status_code=401, detail="Session expired")
+    
+    # Get user data
+    user_doc = await db.users.find_one(
+        {"user_id": session_doc["user_id"]},
+        {"_id": 0}
+    )
+    
+    if not user_doc:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return User(**user_doc)
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
 
-# Add your routes to the router instead of directly to app
+# ============================================================================
+# AUTHENTICATION ROUTES
+# ============================================================================
+
+@api_router.post("/auth/session")
+async def exchange_session(body: SessionExchangeRequest, response: Response):
+    """
+    Exchange session_id from OAuth callback for session_token
+    """
+    try:
+        # Call Emergent Auth API to get user data
+        async with httpx.AsyncClient() as client:
+            auth_response = await client.get(
+                "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
+                headers={"X-Session-ID": body.session_id},
+                timeout=10.0
+            )
+            
+            if auth_response.status_code != 200:
+                raise HTTPException(status_code=401, detail="Invalid session_id")
+            
+            user_data = auth_response.json()
+        
+        # Check if user exists
+        existing_user = await db.users.find_one(
+            {"email": user_data["email"]},
+            {"_id": 0}
+        )
+        
+        if existing_user:
+            user_id = existing_user["user_id"]
+            # Update user data
+            await db.users.update_one(
+                {"user_id": user_id},
+                {"$set": {
+                    "name": user_data["name"],
+                    "picture": user_data.get("picture")
+                }}
+            )
+        else:
+            # Create new user
+            user_id = f"user_{uuid.uuid4().hex[:12]}"
+            await db.users.insert_one({
+                "user_id": user_id,
+                "email": user_data["email"],
+                "name": user_data["name"],
+                "picture": user_data.get("picture"),
+                "created_at": datetime.now(timezone.utc)
+            })
+        
+        # Create session
+        session_token = user_data["session_token"]
+        expires_at = datetime.now(timezone.utc) + timedelta(days=7)
+        
+        await db.user_sessions.insert_one({
+            "user_id": user_id,
+            "session_token": session_token,
+            "expires_at": expires_at,
+            "created_at": datetime.now(timezone.utc)
+        })
+        
+        # Set httpOnly cookie
+        response.set_cookie(
+            key="session_token",
+            value=session_token,
+            httponly=True,
+            secure=True,
+            samesite="none",
+            path="/",
+            max_age=7 * 24 * 60 * 60  # 7 days
+        )
+        
+        return {
+            "user_id": user_id,
+            "email": user_data["email"],
+            "name": user_data["name"],
+            "picture": user_data.get("picture")
+        }
+    
+    except httpx.RequestError as e:
+        logger.error(f"Error connecting to auth service: {e}")
+        raise HTTPException(status_code=503, detail="Authentication service unavailable")
+    except Exception as e:
+        logger.error(f"Error in session exchange: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@api_router.get("/auth/me")
+async def get_me(request: Request):
+    """
+    Get current authenticated user info
+    """
+    user = await get_current_user(request)
+    return user
+
+
+@api_router.post("/auth/logout")
+async def logout(request: Request, response: Response):
+    """
+    Logout user and clear session
+    """
+    try:
+        session_token = request.cookies.get("session_token")
+        if session_token:
+            await db.user_sessions.delete_one({"session_token": session_token})
+        
+        response.delete_cookie(
+            key="session_token",
+            path="/",
+            secure=True,
+            samesite="none"
+        )
+        
+        return {"message": "Logged out successfully"}
+    except Exception as e:
+        logger.error(f"Error during logout: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# BARCODE SCANNING ROUTES
+# ============================================================================
+
+@api_router.get("/current-session")
+async def get_or_create_session(request: Request):
+    """
+    Get or create current barcode scanning session for user
+    """
+    user = await get_current_user(request)
+    
+    # Find active session (not finalized)
+    active_session = await db.barcode_sessions.find_one(
+        {
+            "user_id": user.user_id,
+            "finalized_at": None
+        },
+        {"_id": 0}
+    )
+    
+    if active_session:
+        return BarcodeSession(**active_session)
+    
+    # Create new session
+    session_id = f"session_{uuid.uuid4().hex[:12]}"
+    new_session = {
+        "session_id": session_id,
+        "user_id": user.user_id,
+        "user_email": user.email,
+        "started_at": datetime.now(timezone.utc),
+        "finalized_at": None,
+        "barcode_count": 0
+    }
+    
+    await db.barcode_sessions.insert_one(new_session)
+    return BarcodeSession(**new_session)
+
+
+@api_router.post("/barcode", response_model=SessionStatsResponse)
+async def save_barcode(body: BarcodeSubmit, request: Request):
+    """
+    Save scanned barcode and return session stats
+    Checks for duplicates and shows alert but allows saving
+    """
+    user = await get_current_user(request)
+    
+    # Get or create active session
+    session = await get_or_create_session(request)
+    
+    # Check if barcode already exists in this session
+    existing_entry = await db.barcode_entries.find_one(
+        {
+            "barcode_session_id": session.session_id,
+            "barcode": body.barcode
+        },
+        {"_id": 0}
+    )
+    
+    is_duplicate = existing_entry is not None
+    
+    # Save barcode entry (even if duplicate, as per requirement)
+    entry_id = f"entry_{uuid.uuid4().hex[:12]}"
+    await db.barcode_entries.insert_one({
+        "entry_id": entry_id,
+        "barcode_session_id": session.session_id,
+        "barcode": body.barcode,
+        "timestamp": datetime.now(timezone.utc),
+        "user_email": user.email
+    })
+    
+    # Update session barcode count
+    await db.barcode_sessions.update_one(
+        {"session_id": session.session_id},
+        {"$inc": {"barcode_count": 1}}
+    )
+    
+    # Get all barcodes from this session
+    barcode_entries = await db.barcode_entries.find(
+        {"barcode_session_id": session.session_id},
+        {"_id": 0}
+    ).to_list(10000)
+    
+    barcodes = [entry["barcode"] for entry in barcode_entries]
+    
+    return SessionStatsResponse(
+        barcode_count=len(barcodes),
+        barcodes=barcodes,
+        session_id=session.session_id,
+        is_duplicate=is_duplicate
+    )
+
+
+@api_router.get("/session-stats", response_model=SessionStatsResponse)
+async def get_session_stats(request: Request):
+    """
+    Get current session statistics
+    """
+    user = await get_current_user(request)
+    
+    # Get active session
+    session = await get_or_create_session(request)
+    
+    # Get all barcodes from this session
+    barcode_entries = await db.barcode_entries.find(
+        {"barcode_session_id": session.session_id},
+        {"_id": 0}
+    ).to_list(10000)
+    
+    barcodes = [entry["barcode"] for entry in barcode_entries]
+    
+    return SessionStatsResponse(
+        barcode_count=len(barcodes),
+        barcodes=barcodes,
+        session_id=session.session_id,
+        is_duplicate=False
+    )
+
+
+@api_router.post("/finalize-session")
+async def finalize_session(request: Request):
+    """
+    Finalize current session and generate CSV file
+    Returns the CSV filename
+    """
+    user = await get_current_user(request)
+    
+    # Get active session
+    active_session = await db.barcode_sessions.find_one(
+        {
+            "user_id": user.user_id,
+            "finalized_at": None
+        },
+        {"_id": 0}
+    )
+    
+    if not active_session:
+        raise HTTPException(status_code=404, detail="No active session found")
+    
+    session_id = active_session["session_id"]
+    
+    # Get all barcode entries
+    barcode_entries = await db.barcode_entries.find(
+        {"barcode_session_id": session_id},
+        {"_id": 0}
+    ).sort("timestamp", 1).to_list(10000)
+    
+    if not barcode_entries:
+        raise HTTPException(status_code=400, detail="No barcodes in session")
+    
+    # Generate CSV filename with date and version
+    today = datetime.now(timezone.utc).strftime("%Y%m%d")
+    base_filename = f"barras_{today}"
+    
+    # Find next available version number
+    version = 1
+    while True:
+        csv_filename = f"{base_filename}_v{version}.csv"
+        csv_path = DATA_DIR / csv_filename
+        if not csv_path.exists():
+            break
+        version += 1
+    
+    # Write CSV file
+    with open(csv_path, 'w', newline='', encoding='utf-8') as csvfile:
+        csv_writer = csv.writer(csvfile)
+        # Header
+        csv_writer.writerow(['timestamp', 'codigo', 'usuario'])
+        
+        # Data rows
+        for entry in barcode_entries:
+            timestamp = entry["timestamp"]
+            if isinstance(timestamp, str):
+                timestamp = datetime.fromisoformat(timestamp)
+            
+            csv_writer.writerow([
+                timestamp.strftime("%Y-%m-%d %H:%M:%S"),
+                entry["barcode"],
+                entry["user_email"]
+            ])
+    
+    # Mark session as finalized
+    await db.barcode_sessions.update_one(
+        {"session_id": session_id},
+        {"$set": {"finalized_at": datetime.now(timezone.utc)}}
+    )
+    
+    logger.info(f"CSV file created: {csv_filename} with {len(barcode_entries)} entries")
+    
+    return {
+        "message": "Session finalized successfully",
+        "csv_filename": csv_filename,
+        "barcode_count": len(barcode_entries)
+    }
+
+
+# ============================================================================
+# BASIC ROUTES
+# ============================================================================
+
 @api_router.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {"message": "Barcode Scanner API - Ready"}
 
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
-
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
 
 # Include the router in the main app
 app.include_router(api_router)
@@ -76,13 +475,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
