@@ -359,7 +359,8 @@ async def get_session_stats(request: Request):
     """
     Get current session statistics
     """
-    user = await get_current_user(request)
+    # Verify authentication
+    await get_current_user(request)
     
     # Get active session
     session = await get_or_create_session(request)
