@@ -477,6 +477,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Serve static files (React frontend) for production
+FRONTEND_BUILD_DIR = Path(__file__).parent.parent / "frontend" / "build"
+if FRONTEND_BUILD_DIR.exists():
+    app.mount("/static", StaticFiles(directory=str(FRONTEND_BUILD_DIR / "static")), name="static")
+    
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        """Serve React frontend for all non-API routes"""
+        # Skip API routes
+        if full_path.startswith("api/"):
+            raise HTTPException(status_code=404)
+        
+        # Serve index.html for all other routes (SPA)
+        index_file = FRONTEND_BUILD_DIR / "index.html"
+        if index_file.exists():
+            return FileResponse(index_file)
+        else:
+            raise HTTPException(status_code=404, detail="Frontend not found")
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
