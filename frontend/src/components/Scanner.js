@@ -126,28 +126,59 @@ function Scanner() {
           }
         };
 
-        // Start camera with back camera preference
-        const constraints = {
-          facingMode: { ideal: "environment" } // Back camera
-        };
-
-        await html5QrCode.start(
-          constraints,
-          config,
-          qrCodeSuccessCallback,
-          (errorMessage) => {
-            // Ignore continuous scanning errors
+        // Get available cameras first (this triggers permission request)
+        const cameras = await Html5Qrcode.getCameras();
+        
+        if (cameras && cameras.length > 0) {
+          // Try to find back camera (environment facing)
+          let cameraId = cameras[0].id;
+          
+          // Look for back camera
+          const backCamera = cameras.find(camera => 
+            camera.label.toLowerCase().includes('back') ||
+            camera.label.toLowerCase().includes('rear') ||
+            camera.label.toLowerCase().includes('environment')
+          );
+          
+          if (backCamera) {
+            cameraId = backCamera.id;
+          } else if (cameras.length > 1) {
+            // If multiple cameras, usually the second one is the back camera on mobile
+            cameraId = cameras[cameras.length - 1].id;
           }
-        );
 
-        setIsScannerReady(true);
-        console.log("✅ Scanner started successfully");
+          // Start scanning with selected camera
+          await html5QrCode.start(
+            cameraId,
+            config,
+            qrCodeSuccessCallback,
+            (errorMessage) => {
+              // Ignore continuous scanning errors
+            }
+          );
+
+          setIsScannerReady(true);
+          console.log("✅ Scanner started successfully with camera:", cameraId);
+        } else {
+          throw new Error('No cameras found');
+        }
 
       } catch (error) {
         console.error('Error starting scanner:', error);
+        
+        let errorMsg = '❌ Error al iniciar la cámara.';
+        
+        if (error.name === 'NotAllowedError' || error.message.includes('Permission')) {
+          errorMsg = '❌ Permiso de cámara denegado. Ve a Ajustes del navegador y permite el acceso.';
+        } else if (error.name === 'NotFoundError') {
+          errorMsg = '❌ No se encontró ninguna cámara en el dispositivo.';
+        } else if (error.name === 'NotReadableError') {
+          errorMsg = '❌ La cámara está siendo usada por otra aplicación.';
+        }
+        
         setAlert({
           type: 'warning',
-          message: '❌ Error al iniciar la cámara. Verifica los permisos.'
+          message: errorMsg
         });
       }
     };
