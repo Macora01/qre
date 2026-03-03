@@ -15,7 +15,10 @@ function Scanner() {
   const [showFinalizeModal, setShowFinalizeModal] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [isScannerReady, setIsScannerReady] = useState(false);
+  const [scannerPaused, setScannerPaused] = useState(false);
   const html5QrcodeRef = useRef(null);
+  const lastScannedCodeRef = useRef(null);
+  const lastScanTimeRef = useRef(0);
 
   useEffect(() => {
     // Get current user
@@ -76,8 +79,27 @@ function Scanner() {
 
         // Callback when barcode is detected
         const qrCodeSuccessCallback = async (decodedText, decodedResult) => {
-          if (isScanning) return; // Prevent multiple scans
+          // Prevent multiple scans of same code
+          const now = Date.now();
+          const timeSinceLastScan = now - lastScanTimeRef.current;
+          
+          // Ignore if already scanning or same code within 2 seconds
+          if (isScanning || scannerPaused) return;
+          if (lastScannedCodeRef.current === decodedText && timeSinceLastScan < 2000) return;
+          
           setIsScanning(true);
+          lastScannedCodeRef.current = decodedText;
+          lastScanTimeRef.current = now;
+
+          // PAUSE scanner immediately after successful scan
+          setScannerPaused(true);
+          if (html5QrcodeRef.current) {
+            try {
+              await html5QrcodeRef.current.pause();
+            } catch (e) {
+              console.log("Scanner already paused");
+            }
+          }
 
           try {
             // Save barcode to backend
@@ -122,7 +144,7 @@ function Scanner() {
               message: '❌ Error de conexión'
             });
           } finally {
-            setTimeout(() => setIsScanning(false), 1000);
+            setIsScanning(false);
           }
         };
 
@@ -151,10 +173,10 @@ function Scanner() {
           const advancedConfig = {
             fps: 5, // Reduced FPS for better processing
             qrbox: function(viewfinderWidth, viewfinderHeight) {
-              // For barcodes: wider rectangle (better for linear codes)
+              // For VERTICAL labels: taller rectangle
               let minEdge = Math.min(viewfinderWidth, viewfinderHeight);
-              let qrboxWidth = minEdge * 0.8; // 80% of width
-              let qrboxHeight = minEdge * 0.4; // 40% of height (wider rectangle)
+              let qrboxWidth = minEdge * 0.5; // 50% of width (narrower)
+              let qrboxHeight = minEdge * 0.8; // 80% of height (taller)
               return {
                 width: qrboxWidth,
                 height: qrboxHeight
@@ -231,10 +253,22 @@ function Scanner() {
     };
   }, []);
 
-  const handleNext = () => {
+  const handleNext = async () => {
     setNextEnabled(false);
     setLastScannedCode(null);
     setAlert(null);
+    lastScannedCodeRef.current = null;
+    
+    // RESUME scanner for next code
+    setScannerPaused(false);
+    if (html5QrcodeRef.current) {
+      try {
+        await html5QrcodeRef.current.resume();
+        console.log("✅ Scanner resumed - ready for next code");
+      } catch (e) {
+        console.log("Scanner already active");
+      }
+    }
   };
 
   const handleFinalize = () => {
@@ -358,15 +392,24 @@ function Scanner() {
             padding: '16px', 
             color: 'var(--text-color)',
             fontSize: '13px',
-            backgroundColor: 'var(--accent-color)',
+            backgroundColor: scannerPaused ? '#f5e6d3' : 'var(--accent-color)',
             borderRadius: '8px',
-            marginTop: '12px'
+            marginTop: '12px',
+            border: scannerPaused ? '2px solid var(--error-color)' : 'none'
           }}>
-            <strong>💡 Para códigos de barras:</strong><br/>
-            • Mantén a 15-20 cm de distancia<br/>
-            • Alinea horizontalmente dentro del rectángulo<br/>
-            • Espera 2-3 segundos para que enfoque<br/>
-            • Buena iluminación es clave
+            {scannerPaused ? (
+              <>
+                <strong>⏸️ Escáner PAUSADO</strong><br/>
+                Presiona "Próximo" para continuar
+              </>
+            ) : (
+              <>
+                <strong>📱 Para códigos QR verticales:</strong><br/>
+                • Mantén a 15-20 cm de distancia<br/>
+                • Alinea dentro del rectángulo vertical<br/>
+                • Espera 1-2 segundos para que enfoque
+              </>
+            )}
           </div>
         )}
       </div>
