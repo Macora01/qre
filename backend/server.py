@@ -184,21 +184,11 @@ async def email_login(body: EmailLoginRequest, response: Response):
         "created_at": datetime.now(timezone.utc)
     })
 
-    # Set httpOnly cookie
-    response.set_cookie(
-        key="session_token",
-        value=session_token,
-        httponly=True,
-        secure=True,
-        samesite="lax",
-        path="/",
-        max_age=30 * 24 * 60 * 60
-    )
-
     return {
         "user_id": user_id,
         "email": email,
-        "name": email.split("@")[0]
+        "name": email.split("@")[0],
+        "session_token": session_token
     }
 
 
@@ -218,15 +208,15 @@ async def logout(request: Request, response: Response):
     """
     try:
         session_token = request.cookies.get("session_token")
+        if not session_token:
+            auth_header = request.headers.get("Authorization")
+            if auth_header and auth_header.startswith("Bearer "):
+                session_token = auth_header.replace("Bearer ", "")
+        
         if session_token:
             await db.user_sessions.delete_one({"session_token": session_token})
         
-        response.delete_cookie(
-            key="session_token",
-            path="/",
-            secure=True,
-            samesite="lax"
-        )
+        response.delete_cookie(key="session_token", path="/")
         
         return {"message": "Logged out successfully"}
     except Exception as e:

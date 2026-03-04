@@ -12,38 +12,28 @@ function LoginPage() {
   const [checking, setChecking] = useState(true);
 
   useEffect(() => {
-    // Load saved email
     const saved = localStorage.getItem("qre_email");
     if (saved) setEmail(saved);
 
-    // Check if already authenticated
-    const checkAuth = async () => {
-      try {
-        const response = await fetch(`${API}/auth/me`, { credentials: "include" });
-        if (response.ok) {
-          navigate("/scanner");
-          return;
-        }
-      } catch (e) { /* not authenticated */ }
-      setChecking(false);
-    };
-    checkAuth();
+    const token = localStorage.getItem("qre_token");
+    if (!token) { setChecking(false); return; }
+
+    fetch(`${API}/auth/me`, {
+      headers: { "Authorization": `Bearer ${token}` }
+    }).then(r => {
+      if (r.ok) navigate("/scanner");
+      else setChecking(false);
+    }).catch(() => setChecking(false));
   }, [navigate]);
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError("");
-
     const trimmed = email.trim().toLowerCase();
-    if (!trimmed) {
-      setError("Ingresa un correo electrónico");
-      return;
-    }
 
-    const emailRegex = /^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/;
-    if (!emailRegex.test(trimmed)) {
-      setError("Formato de correo inválido");
-      return;
+    if (!trimmed) { setError("Ingresa un correo electrónico"); return; }
+    if (!/^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$/.test(trimmed)) {
+      setError("Formato de correo inválido"); return;
     }
 
     setLoading(true);
@@ -51,14 +41,14 @@ function LoginPage() {
       const response = await fetch(`${API}/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({ email: trimmed }),
       });
 
       if (response.ok) {
-        const userData = await response.json();
+        const data = await response.json();
         localStorage.setItem("qre_email", trimmed);
-        navigate("/scanner", { state: { user: userData }, replace: true });
+        localStorage.setItem("qre_token", data.session_token);
+        navigate("/scanner", { replace: true });
       } else {
         const data = await response.json();
         setError(data.detail || "Error al iniciar sesión");
@@ -83,9 +73,7 @@ function LoginPage() {
     <div className="login-container">
       <div className="login-box">
         <h1 className="login-title" data-testid="login-title">Escáner QR</h1>
-        <p className="login-subtitle">
-          Ingresa tu correo para comenzar a escanear
-        </p>
+        <p className="login-subtitle">Ingresa tu correo para comenzar a escanear</p>
         <form onSubmit={handleSubmit}>
           <input
             type="email"
@@ -97,15 +85,8 @@ function LoginPage() {
             autoFocus
             data-testid="email-input"
           />
-          {error && (
-            <div className="login-error" data-testid="login-error">{error}</div>
-          )}
-          <button
-            type="submit"
-            className="login-button"
-            disabled={loading}
-            data-testid="login-button"
-          >
+          {error && <div className="login-error" data-testid="login-error">{error}</div>}
+          <button type="submit" className="login-button" disabled={loading} data-testid="login-button">
             {loading ? "Ingresando..." : "Entrar"}
           </button>
         </form>

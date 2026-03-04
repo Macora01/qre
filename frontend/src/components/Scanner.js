@@ -21,12 +21,13 @@ function Scanner() {
   const lastScanTimeRef = useRef(0);
 
   useEffect(() => {
+    const token = localStorage.getItem("qre_token");
+    const authHeaders = { "Authorization": `Bearer ${token}` };
+
     // Get current user
     const fetchUser = async () => {
       try {
-        const response = await fetch(`${API}/auth/me`, {
-          credentials: 'include'
-        });
+        const response = await fetch(`${API}/auth/me`, { headers: authHeaders });
         if (response.ok) {
           const userData = await response.json();
           setUser(userData);
@@ -39,9 +40,7 @@ function Scanner() {
     // Get session stats
     const fetchStats = async () => {
       try {
-        const response = await fetch(`${API}/session-stats`, {
-          credentials: 'include'
-        });
+        const response = await fetch(`${API}/session-stats`, { headers: authHeaders });
         if (response.ok) {
           const data = await response.json();
           setCounter(data.barcode_count);
@@ -103,12 +102,13 @@ function Scanner() {
 
           try {
             // Save barcode to backend
+            const token = localStorage.getItem("qre_token");
             const response = await fetch(`${API}/barcode`, {
               method: 'POST',
               headers: {
-                'Content-Type': 'application/json'
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
               },
-              credentials: 'include',
               body: JSON.stringify({ barcode: decodedText })
             });
 
@@ -285,9 +285,10 @@ function Scanner() {
 
   const confirmFinalize = async () => {
     try {
+      const token = localStorage.getItem("qre_token");
       const response = await fetch(`${API}/finalize-session`, {
         method: 'POST',
-        credentials: 'include'
+        headers: { 'Authorization': `Bearer ${token}` }
       });
 
       if (response.ok) {
@@ -323,13 +324,15 @@ function Scanner() {
 
   const handleLogout = async () => {
     try {
+      const token = localStorage.getItem("qre_token");
       await fetch(`${API}/auth/logout`, {
         method: 'POST',
-        credentials: 'include'
+        headers: { 'Authorization': `Bearer ${token}` }
       });
     } catch (error) {
       console.error('Error logging out:', error);
     }
+    localStorage.removeItem("qre_token");
     localStorage.removeItem("qre_email");
     navigate('/login');
   };

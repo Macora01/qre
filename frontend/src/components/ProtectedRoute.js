@@ -1,35 +1,24 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
 
 function ProtectedRoute({ children }) {
   const navigate = useNavigate();
-  const location = useLocation();
-  const [isAuthenticated, setIsAuthenticated] = useState(
-    location.state?.user ? true : null
-  );
+  const [isAuthenticated, setIsAuthenticated] = useState(null);
 
   useEffect(() => {
-    if (location.state?.user) {
-      setIsAuthenticated(true);
-      return;
-    }
+    const token = localStorage.getItem("qre_token");
+    if (!token) { setIsAuthenticated(false); navigate("/login"); return; }
 
-    const checkAuth = async () => {
-      try {
-        const response = await fetch(`${API}/auth/me`, { credentials: "include" });
-        if (!response.ok) throw new Error("Not authenticated");
-        setIsAuthenticated(true);
-      } catch (error) {
-        setIsAuthenticated(false);
-        navigate("/login");
-      }
-    };
-
-    checkAuth();
-  }, [navigate, location.state]);
+    fetch(`${API}/auth/me`, {
+      headers: { "Authorization": `Bearer ${token}` }
+    }).then(r => {
+      if (r.ok) setIsAuthenticated(true);
+      else { setIsAuthenticated(false); navigate("/login"); }
+    }).catch(() => { setIsAuthenticated(false); navigate("/login"); });
+  }, [navigate]);
 
   if (isAuthenticated === null) {
     return (
@@ -41,7 +30,6 @@ function ProtectedRoute({ children }) {
   }
 
   if (!isAuthenticated) return null;
-
   return children;
 }
 
