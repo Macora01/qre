@@ -327,33 +327,26 @@ function Scanner() {
         method: 'POST',
         credentials: 'include'
       });
-      navigate('/login');
     } catch (error) {
       console.error('Error logging out:', error);
-      navigate('/login');
     }
+    localStorage.removeItem("qre_email");
+    navigate('/login');
   };
 
   return (
     <div className="scanner-container">
       <div className="scanner-header">
-        <h1>📦 Escáner de Códigos de Barras</h1>
+        <h1>Escáner de Códigos QR</h1>
         {user && (
           <div className="user-info">
-            {user.picture && (
-              <img
-                src={user.picture}
-                alt={user.name}
-                className="user-avatar"
-              />
-            )}
-            <span className="user-name">{user.name}</span>
+            <span className="user-name">{user.email}</span>
             <button
               className="logout-button"
               onClick={handleLogout}
               data-testid="logout-button"
             >
-              Cerrar sesión
+              Salir
             </button>
           </div>
         )}

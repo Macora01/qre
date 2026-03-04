@@ -93,6 +93,35 @@ body {
   transform: translateY(0);
 }
 
+.login-input {
+  width: 100%;
+  padding: 14px 16px;
+  border: 2px solid var(--accent-color);
+  border-radius: 8px;
+  font-size: 16px;
+  color: var(--text-color);
+  background: var(--white);
+  outline: none;
+  transition: border-color 0.3s ease;
+  margin-bottom: 16px;
+}
+
+.login-input:focus {
+  border-color: var(--primary-color);
+}
+
+.login-input::placeholder {
+  color: var(--text-light);
+  opacity: 0.6;
+}
+
+.login-error {
+  color: var(--error-color);
+  font-size: 14px;
+  margin-bottom: 12px;
+  text-align: left;
+}
+
 /* Scanner Page */
 .scanner-container {
   min-height: 100vh;

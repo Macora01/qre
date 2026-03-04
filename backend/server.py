@@ -12,7 +12,7 @@ from typing import List, Optional
 import uuid
 from datetime import datetime, timezone, timedelta
 import csv
-import httpx
+import re
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -76,8 +76,8 @@ class BarcodeEntry(BaseModel):
     timestamp: datetime
     user_email: str
 
-class SessionExchangeRequest(BaseModel):
-    session_id: str
+class EmailLoginRequest(BaseModel):
+    email: str
 
 class BarcodeSubmit(BaseModel):
     barcode: str
@@ -147,87 +147,59 @@ async def get_current_user(request: Request) -> User:
 # AUTHENTICATION ROUTES
 # ============================================================================
 
-@api_router.post("/auth/session")
-async def exchange_session(body: SessionExchangeRequest, response: Response):
+EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
+
+@api_router.post("/auth/login")
+async def email_login(body: EmailLoginRequest, response: Response):
     """
-    Exchange session_id from OAuth callback for session_token
+    Simple email-based login. Validates email format, creates user if needed, returns session.
     """
-    try:
-        # Call Emergent Auth API to get user data
-        async with httpx.AsyncClient() as client:
-            auth_response = await client.get(
-                "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data",
-                headers={"X-Session-ID": body.session_id},
-                timeout=10.0
-            )
-            
-            if auth_response.status_code != 200:
-                raise HTTPException(status_code=401, detail="Invalid session_id")
-            
-            user_data = auth_response.json()
-        
-        # Check if user exists
-        existing_user = await db.users.find_one(
-            {"email": user_data["email"]},
-            {"_id": 0}
-        )
-        
-        if existing_user:
-            user_id = existing_user["user_id"]
-            # Update user data
-            await db.users.update_one(
-                {"user_id": user_id},
-                {"$set": {
-                    "name": user_data["name"],
-                    "picture": user_data.get("picture")
-                }}
-            )
-        else:
-            # Create new user
-            user_id = f"user_{uuid.uuid4().hex[:12]}"
-            await db.users.insert_one({
-                "user_id": user_id,
-                "email": user_data["email"],
-                "name": user_data["name"],
-                "picture": user_data.get("picture"),
-                "created_at": datetime.now(timezone.utc)
-            })
-        
-        # Create session
-        session_token = user_data["session_token"]
-        expires_at = datetime.now(timezone.utc) + timedelta(days=7)
-        
-        await db.user_sessions.insert_one({
+    email = body.email.strip().lower()
+
+    if not EMAIL_REGEX.match(email):
+        raise HTTPException(status_code=400, detail="Formato de correo inválido")
+
+    # Check if user exists
+    existing_user = await db.users.find_one({"email": email}, {"_id": 0})
+
+    if existing_user:
+        user_id = existing_user["user_id"]
+    else:
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        await db.users.insert_one({
             "user_id": user_id,
-            "session_token": session_token,
-            "expires_at": expires_at,
+            "email": email,
+            "name": email.split("@")[0],
             "created_at": datetime.now(timezone.utc)
         })
-        
-        # Set httpOnly cookie
-        response.set_cookie(
-            key="session_token",
-            value=session_token,
-            httponly=True,
-            secure=True,
-            samesite="none",
-            path="/",
-            max_age=7 * 24 * 60 * 60  # 7 days
-        )
-        
-        return {
-            "user_id": user_id,
-            "email": user_data["email"],
-            "name": user_data["name"],
-            "picture": user_data.get("picture")
-        }
-    
-    except httpx.RequestError as e:
-        logger.error(f"Error connecting to auth service: {e}")
-        raise HTTPException(status_code=503, detail="Authentication service unavailable")
-    except Exception as e:
-        logger.error(f"Error in session exchange: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+
+    # Create session
+    session_token = uuid.uuid4().hex
+    expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+
+    await db.user_sessions.insert_one({
+        "user_id": user_id,
+        "session_token": session_token,
+        "expires_at": expires_at,
+        "created_at": datetime.now(timezone.utc)
+    })
+
+    # Set httpOnly cookie
+    response.set_cookie(
+        key="session_token",
+        value=session_token,
+        httponly=True,
+        secure=True,
+        samesite="none",
+        path="/",
+        max_age=30 * 24 * 60 * 60
+    )
+
+    return {
+        "user_id": user_id,
+        "email": email,
+        "name": email.split("@")[0]
+    }
 
 
 @api_router.get("/auth/me")
