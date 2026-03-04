@@ -97,3 +97,7 @@ backend_test.py
 
 # Memory files
 memory/
+-e 
+# Environment files
+*.env
+*.env.*
