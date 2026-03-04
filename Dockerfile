@@ -13,6 +13,9 @@ RUN yarn install --frozen-lockfile
 # Copy frontend source
 COPY frontend/ ./
 
+# In production, use relative URLs (empty REACT_APP_BACKEND_URL = relative /api)
+ENV REACT_APP_BACKEND_URL=""
+
 # Build frontend for production
 RUN yarn build
 
