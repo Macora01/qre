@@ -21,17 +21,23 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies including build tools
 RUN apt-get update && apt-get install -y \
     curl \
+    gcc \
+    g++ \
+    make \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy backend requirements FIRST (for better caching)
-COPY backend/requirements.txt /app/backend/requirements.txt
+# Upgrade pip first
+RUN pip install --no-cache-dir --upgrade pip
 
-# Upgrade pip and install Python dependencies
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-    pip install --no-cache-dir -r /app/backend/requirements.txt
+# Copy and install requirements
+COPY backend/requirements.txt /app/backend/requirements.txt
+RUN pip install --no-cache-dir -r /app/backend/requirements.txt || \
+    (echo "=== PIP INSTALL FAILED ===" && \
+     echo "Trying with verbose output:" && \
+     pip install -v -r /app/backend/requirements.txt)
 
 # Copy backend code
 COPY backend/ /app/backend/
@@ -45,16 +51,11 @@ RUN mkdir -p /app/data
 # Expose port
 EXPOSE 8001
 
-# Environment variables (will be overridden by Coolify/docker-compose)
+# Environment variables
 ENV PYTHONUNBUFFERED=1
-ENV MONGO_URL=mongodb://localhost:27017
-ENV DB_NAME=qre_production
-ENV CORS_ORIGINS=*
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD curl -f http://localhost:8001/api/ || exit 1
-
-# Start backend server (FastAPI will serve both API and frontend)
+# Start backend server
 CMD ["uvicorn", "backend.server:app", "--host", "0.0.0.0", "--port", "8001"]
+
+
 
