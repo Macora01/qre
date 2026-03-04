@@ -31,7 +31,13 @@ dist/
 dist
 
 # Environment files (comprehensive coverage)
-
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+backend/.env
+frontend/.env
 *token.json*
 *credentials.json*
 
@@ -78,3 +84,16 @@ agenthub/agents/youtube/db
 
 # Mobile development
 android-sdk/ 
+
+# CSV data files (optional - uncomment if you don't want to track CSV files)
+# data/*.csv
+
+# Test reports
+test_reports/
+backend_test.py
+
+# Supervisor and system logs
+/var/log/
+
+# Memory files
+memory/
