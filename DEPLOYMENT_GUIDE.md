@@ -24,7 +24,7 @@
 ### Paso 1: Verificar Archivos
 
 Asegúrate que tu repositorio tenga:
-- ✅ `docker-compose.yml` (en la raíz)
+- ✅ `docker-compose.yaml` (en la raíz) ← Nota: .yaml no .yml
 - ✅ `Dockerfile` (en la raíz)
 - ✅ Código frontend y backend
 
@@ -41,7 +41,7 @@ Asegúrate que tu repositorio tenga:
 
 3. **Build Configuration:**
    - Build Type: **"Docker Compose"** ← IMPORTANTE
-   - Docker Compose File: **`docker-compose.yml`**
+   - Docker Compose File: **`docker-compose.yaml`** ← Nota: .yaml
    - Port: **8001**
 
 4. **Variables de Entorno:**
