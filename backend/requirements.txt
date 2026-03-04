@@ -16,8 +16,5 @@ pydantic==2.12.5
 pydantic_core==2.41.5
 email-validator==2.3.0
 
-# Authentication
-emergentintegrations==0.1.0
-
 # Type checking
 typing_extensions==4.15.0
