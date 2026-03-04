@@ -19,7 +19,7 @@ load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
+client = AsyncIOMotorClient(mongo_url, serverSelectionTimeoutMS=5000)
 db = client[os.environ['DB_NAME']]
 
 # Create the main app without a prefix
@@ -150,7 +150,7 @@ async def get_current_user(request: Request) -> User:
 EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$')
 
 @api_router.post("/auth/login")
-async def email_login(body: EmailLoginRequest, response: Response):
+async def email_login(body: EmailLoginRequest):
     """
     Simple email-based login. Validates email format, creates user if needed, returns session.
     """
@@ -159,37 +159,41 @@ async def email_login(body: EmailLoginRequest, response: Response):
     if not EMAIL_REGEX.match(email):
         raise HTTPException(status_code=400, detail="Formato de correo inválido")
 
-    # Check if user exists
-    existing_user = await db.users.find_one({"email": email}, {"_id": 0})
+    try:
+        # Check if user exists
+        existing_user = await db.users.find_one({"email": email}, {"_id": 0})
 
-    if existing_user:
-        user_id = existing_user["user_id"]
-    else:
-        user_id = f"user_{uuid.uuid4().hex[:12]}"
-        await db.users.insert_one({
+        if existing_user:
+            user_id = existing_user["user_id"]
+        else:
+            user_id = f"user_{uuid.uuid4().hex[:12]}"
+            await db.users.insert_one({
+                "user_id": user_id,
+                "email": email,
+                "name": email.split("@")[0],
+                "created_at": datetime.now(timezone.utc)
+            })
+
+        # Create session
+        session_token = uuid.uuid4().hex
+        expires_at = datetime.now(timezone.utc) + timedelta(days=30)
+
+        await db.user_sessions.insert_one({
             "user_id": user_id,
-            "email": email,
-            "name": email.split("@")[0],
+            "session_token": session_token,
+            "expires_at": expires_at,
             "created_at": datetime.now(timezone.utc)
         })
 
-    # Create session
-    session_token = uuid.uuid4().hex
-    expires_at = datetime.now(timezone.utc) + timedelta(days=30)
-
-    await db.user_sessions.insert_one({
-        "user_id": user_id,
-        "session_token": session_token,
-        "expires_at": expires_at,
-        "created_at": datetime.now(timezone.utc)
-    })
-
-    return {
-        "user_id": user_id,
-        "email": email,
-        "name": email.split("@")[0],
-        "session_token": session_token
-    }
+        return {
+            "user_id": user_id,
+            "email": email,
+            "name": email.split("@")[0],
+            "session_token": session_token
+        }
+    except Exception as e:
+        logger.error(f"Login error: {e}")
+        raise HTTPException(status_code=500, detail=f"Error del servidor: {str(e)}")
 
 
 @api_router.get("/auth/me")
@@ -427,6 +431,15 @@ async def finalize_session(request: Request):
 @api_router.get("/")
 async def root():
     return {"message": "Barcode Scanner API - Ready"}
+
+@api_router.get("/health")
+async def health_check():
+    """Check if MongoDB is reachable"""
+    try:
+        await client.admin.command('ping')
+        return {"status": "ok", "mongodb": "connected"}
+    except Exception as e:
+        return {"status": "error", "mongodb": str(e)}
 
 
 # Include the router in the main app
