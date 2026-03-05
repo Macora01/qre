@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
+import { unlockBeep } from "../lib/beep";
 
 const API = (process.env.REACT_APP_BACKEND_URL || "") + "/api";
 
@@ -36,6 +37,7 @@ function LoginPage() {
     }
 
     setLoading(true);
+    unlockBeep();
     try {
       const response = await fetch(`${API}/auth/login`, {
         method: "POST",
